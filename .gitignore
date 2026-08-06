@@ -2,7 +2,32 @@ Workbench/node_modules/
 Workbench/dist/
 qa/
 .DS_Store
-Workbench/.env
+
+# Local environment and credential files. Keep sanitized examples trackable.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Private keys, certificates, and common credential exports.
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+credentials.*.json
+secrets.json
+secrets.*.json
+
+# Local runtime state that may contain private user data.
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
 Workbench/config/attention.local.json
 个人知识库/10_raw/my-thoughts/reading-notes/*
 !个人知识库/10_raw/my-thoughts/reading-notes/.gitkeep
