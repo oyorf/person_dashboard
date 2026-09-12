@@ -8,6 +8,8 @@ const excludedDirectories = new Set([".git", "dist", "node_modules", "qa"]);
 const excludedFiles = new Set([
   "Workbench/package-lock.json",
   "Workbench/scripts/privacy-scan.mjs",
+  // Gitignored local credential store written by the System page; same trust level as .env.
+  "Workbench/config/learning-ai.local.json",
 ]);
 const binaryExtensions = new Set([
   ".gif", ".ico", ".jpeg", ".jpg", ".pdf", ".png", ".webp",

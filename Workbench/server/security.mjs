@@ -19,6 +19,7 @@ export const DEFAULT_ALLOWED_ROOTS = Object.freeze([
   "10_raw",
   "40_topics",
   "50_scripts",
+  "60_learning",
   "90_runs",
   "wiki",
 ]);

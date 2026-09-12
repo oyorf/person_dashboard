@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "_comment": "合成示例（SYNTHETIC DEMO，非真实简历）。复制为 job-profile.local.json 后填入真实画像；该文件已被 .gitignore 忽略。",
+  "cities": ["广州", "深圳", "杭州", "苏州"],
+  "minSalaryK": 12,
+  "experienceYears": [1, 5],
+  "industries": ["储能", "IoT", "物联网", "新能源", "充电桩"],
+  "targetCompanies": ["固德威", "阳光电源"],
+  "exclude": {
+    "companyKeywords": ["外包", "劳务派遣", "驻场"],
+    "maxCompanySize": 300
+  },
+  "resumeSummary": "合成示例：3 年 Java 后端经验，熟悉 Spring Boot / MySQL / Redis / Kafka，做过 IoT 设备接入平台与能源管理后台，了解 MQTT 与 Modbus 协议。",
+  "llm": {
+    "threshold": 7,
+    "dailyLimit": 20
+  }
+}

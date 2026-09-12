@@ -33,6 +33,16 @@ import {
   materialsHomePayload,
 } from "./materials.mjs";
 import { booksPayload } from "./books.mjs";
+import { projectsPayload } from "./learning.mjs";
+import { createLearningStore } from "./learning-store.mjs";
+import { createLearningAiClient, describeLearningAiConfig, loadLearningAiConfig, readLearningAiFileConfig, resolveLearningAiConfig, saveLearningAiFileConfig } from "./learning-ai.mjs";
+import {
+  JOB_STATUS_LABELS,
+  JOB_STATUSES,
+  createJobStore,
+  jobKey,
+} from "./job-store.mjs";
+import { createJobScorer, hardFilterJob } from "./job-match.mjs";
 import {
   getSocialInsight,
   getSocialTrend,
@@ -71,6 +81,7 @@ const readerImageAllowedRoots = [
   "30_self_media",
   "40_topics",
   "50_scripts",
+  "60_learning",
   "wiki",
 ];
 
@@ -196,6 +207,22 @@ async function serveReaderImage(res, index, vaultRoot, sourceId, source) {
   res.end(buffer);
 }
 
+function learningError(res, error) {
+  const statusByCode = {
+    AI_NOT_CONFIGURED: 503,
+    DAG_INVALID: 422,
+    EMPTY_SUBMISSION: 422,
+    LEARNING_AI_KEY_REQUIRED: 422,
+    INVALID_LEARNING_AI_BASE_URL: 422,
+    LEVEL_LOCKED: 409,
+    LEVEL_MASTERED: 409,
+    ATTEMPT_NOT_PENDING: 409,
+    REF_OUT_OF_VAULT: 422,
+  };
+  const status = statusByCode[error.code] ?? (error.code === "ENOENT" ? 404 : 500);
+  return json(res, status, { error: { code: error.code ?? "LEARNING_ERROR", message: error.message } });
+}
+
 function errorPayload(error) {
   return {
     error: {
@@ -207,6 +234,7 @@ function errorPayload(error) {
 
 function errorStatus(error) {
   const code = error?.code;
+  if (code === "AI_NOT_CONFIGURED") return 503;
   if (code === "LOCAL_API_ORIGIN_DENIED") return 403;
   if (code === "UNSUPPORTED_MEDIA_TYPE") return 415;
   if (
@@ -789,6 +817,47 @@ export function workbenchApiPlugin({
     reason: "manual",
     ...options,
   });
+  loadLearningAiConfig({ workbenchRoot }); // 启动时把 .env 灌入 process.env
+  let learningAi = { config: null, client: null, source: null };
+  const rebuildLearningAi = () => {
+    const fileConfig = readLearningAiFileConfig(workbenchRoot);
+    const config = resolveLearningAiConfig({ fileConfig });
+    learningAi = {
+      config,
+      client: config ? createLearningAiClient(config) : null,
+      source: !config ? null : fileConfig?.apiKey ? "local-file" : "env",
+    };
+  };
+  rebuildLearningAi();
+  const learningStore = createLearningStore({
+    vaultRoot,
+    ai: () => learningAi.client,
+  });
+  const jobStore = createJobStore({
+    filePath: path.join(workbenchRoot, "data", "job-tracker.local.json"),
+  });
+  const loadJobProfile = async () => {
+    try {
+      return JSON.parse(
+        await readFile(path.join(workbenchRoot, "config", "job-profile.local.json"), "utf8"),
+      );
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const jobTrackerPayload = async () => {
+    const [jobs, followups, today] = await Promise.all([
+      jobStore.list(),
+      jobStore.pendingFollowups(),
+      jobStore.todayRecommendations(),
+    ]);
+    const groups = JOB_STATUSES.map((status) => {
+      const items = jobs.filter((job) => job.status === status);
+      return { status, label: JOB_STATUS_LABELS[status], count: items.length, items };
+    });
+    return { generatedAt: new Date().toISOString(), total: jobs.length, followups, today, groups };
+  };
 
   async function indexedReaderDocument(documentId) {
     const document = documentPayload(await currentIndex(), documentId);
@@ -995,6 +1064,23 @@ export function workbenchApiPlugin({
             return json(res, 200, await loadAttentionStrategy(workbenchRoot));
           }
 
+          if (req.method === "GET" && url.pathname === "/api/config/learning-ai") {
+            return json(res, 200, describeLearningAiConfig(learningAi.config, learningAi.source));
+          }
+
+          if (req.method === "PUT" && url.pathname === "/api/config/learning-ai") {
+            try {
+              const body = await readJson(req, 8 * 1024);
+              await saveLearningAiFileConfig(workbenchRoot, {
+                baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : "",
+                apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+                model: typeof body.model === "string" ? body.model : "",
+              });
+              rebuildLearningAi();
+              return json(res, 200, describeLearningAiConfig(learningAi.config, learningAi.source));
+            } catch (error) { return learningError(res, error); }
+          }
+
           if (req.method === "GET" && url.pathname === "/api/materials") {
             const [current, readingState] = await Promise.all([
               currentIndex(),
@@ -1005,6 +1091,206 @@ export function workbenchApiPlugin({
 
           if (req.method === "GET" && url.pathname === "/api/books") {
             return json(res, 200, booksPayload(await currentIndex()));
+          }
+
+          if (req.method === "GET" && url.pathname === "/api/learning/projects") {
+            return json(res, 200, {
+              ...projectsPayload(await currentIndex()),
+              aiConfigured: Boolean(learningAi.config),
+            });
+          }
+
+          const learningProjectMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)$/);
+          if (req.method === "GET" && learningProjectMatch) {
+            try {
+              return json(res, 200, {
+                ...(await learningStore.readProjectDetail(learningProjectMatch[1])),
+                aiConfigured: Boolean(learningAi.config),
+              });
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const learningLevelMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)$/);
+          if (req.method === "GET" && learningLevelMatch) {
+            try {
+              return json(res, 200, await learningStore.readLevelDetail(learningLevelMatch[1], learningLevelMatch[2]));
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const learningAttemptsMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)\/attempts$/);
+          if (req.method === "GET" && learningAttemptsMatch) {
+            try {
+              const attempts = await learningStore.listAttempts(learningAttemptsMatch[1], learningAttemptsMatch[2]);
+              return json(res, 200, {
+                attempts: attempts.map((entry) => ({ id: entry.id, ...entry.frontmatter, body: entry.body })),
+              });
+            } catch (error) { return learningError(res, error); }
+          }
+
+          if (req.method === "POST" && url.pathname === "/api/learning/projects") {
+            try {
+              const body = await readJson(req, 64 * 1024);
+              const created = await learningStore.createProject({
+                title: String(body.title ?? "").trim(),
+                description: String(body.description ?? ""),
+                sources: Array.isArray(body.sources) ? body.sources.map(String) : [],
+                slug: body.slug,
+              });
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, created);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const publishMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels:publish$/);
+          if (req.method === "POST" && publishMatch) {
+            try {
+              const body = await readJson(req, 256 * 1024);
+              const result = await learningStore.publishLevels(publishMatch[1], body.levels ?? []);
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          if (req.method === "PUT" && learningLevelMatch) {
+            try {
+              const body = await readJson(req, 256 * 1024);
+              const result = await learningStore.updateLevel(learningLevelMatch[1], learningLevelMatch[2], body);
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const submitMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)\/submit$/);
+          if (req.method === "POST" && submitMatch) {
+            try {
+              const body = await readJson(req, 512 * 1024);
+              const result = await learningStore.submitAttempt(submitMatch[1], submitMatch[2], {
+                contentMd: String(body.content_md ?? ""),
+                vaultRefs: Array.isArray(body.vault_refs) ? body.vault_refs.map(String) : [],
+              });
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const probeMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)\/probe$/);
+          if (req.method === "POST" && probeMatch) {
+            try {
+              const body = await readJson(req, 256 * 1024);
+              const result = await learningStore.answerProbe(probeMatch[1], probeMatch[2], String(body.attempt_id ?? ""), {
+                answers: Array.isArray(body.answers) ? body.answers.map(String) : [],
+              });
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const retryMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)\/retry$/);
+          if (req.method === "POST" && retryMatch) {
+            try {
+              const result = await learningStore.retryVariant(retryMatch[1], retryMatch[2]);
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          const selfAssessMatch = url.pathname.match(/^\/api\/learning\/projects\/([a-z0-9-]+)\/levels\/([a-z0-9-]+)\/self-assess$/);
+          if (req.method === "POST" && selfAssessMatch) {
+            try {
+              const body = await readJson(req, 64 * 1024);
+              const result = await learningStore.selfAssess(selfAssessMatch[1], selfAssessMatch[2], { score: body.score });
+              await refreshIndex({ reason: "learning" });
+              return json(res, 200, result);
+            } catch (error) { return learningError(res, error); }
+          }
+
+          // 求职跟踪端点
+          if (req.method === "GET" && url.pathname === "/api/job-tracker/jobs") {
+            return json(res, 200, await jobTrackerPayload());
+          }
+
+          if (req.method === "POST" && url.pathname === "/api/job-tracker/jobs/import") {
+            const body = await readJson(req, 256 * 1024);
+            const text = String(body.text ?? "").trim();
+            if (!text) {
+              const error = new Error("JD 文本不能为空。");
+              error.code = "INVALID_JOB_IMPORT";
+              throw error;
+            }
+            if (!learningAi.config) {
+              const error = new Error("AI 未配置：请先在「系统状态」页保存 LEARNING_AI 配置。");
+              error.code = "AI_NOT_CONFIGURED";
+              throw error;
+            }
+            const scorer = createJobScorer(learningAi.config);
+            const cleaned = await scorer.importJd({ text });
+            await jobStore.upsertMany([cleaned]);
+            const jobs = await jobStore.list();
+            const key = jobKey(cleaned);
+            const job = jobs.find((entry) => entry.key === key);
+            // 有画像时顺手过滤 + 打分，让投喂的岗位直接进入推荐视野
+            const profile = await loadJobProfile();
+            if (job && profile) {
+              const filtered = hardFilterJob(job, profile);
+              await jobStore.setMatchResult(job.id, {
+                filterPass: filtered.pass,
+                filterReasons: filtered.reasons,
+              });
+              if (filtered.pass) {
+                try {
+                  const scored = await scorer.score({ profile, job });
+                  await jobStore.setMatchResult(job.id, {
+                    score: scored.score,
+                    scoreReasons: scored.reasons,
+                  });
+                } catch (scoreError) {
+                  server.config.logger.warn(`job-tracker 投喂打分失败：${scoreError.message}`);
+                }
+              }
+            }
+            return json(res, 200, {
+              job: (await jobStore.list()).find((entry) => entry.key === key) ?? null,
+            });
+          }
+
+          const jobStatusMatch = url.pathname.match(/^\/api\/job-tracker\/jobs\/([^/]+)\/status$/);
+          if (req.method === "POST" && jobStatusMatch) {
+            const body = await readJson(req, 8 * 1024);
+            const updated = await jobStore.setStatus(
+              decodeURIComponent(jobStatusMatch[1]),
+              String(body.status ?? ""),
+              { appliedAt: typeof body.appliedAt === "string" ? body.appliedAt : undefined },
+            );
+            return json(res, 200, { job: updated });
+          }
+
+          // AI 代理端点
+          if (req.method === "POST" && url.pathname === "/api/learning/ai/decompose") {
+            try {
+              if (!learningAi.client) throw Object.assign(new Error("AI 未配置"), { code: "AI_NOT_CONFIGURED" });
+              const body = await readJson(req, 256 * 1024);
+              const sourcesText = Array.isArray(body.sources)
+                ? (await Promise.all(body.sources.map(async (ref) => {
+                    const absolute = path.join(vaultRoot, String(ref));
+                    if (!absolute.startsWith(vaultRoot)) return "";
+                    try { return await readFile(absolute, "utf8"); } catch { return ""; }
+                  }))).join("\n\n")
+                : "";
+              return json(res, 200, await learningAi.client.decompose({
+                title: String(body.title ?? ""), description: String(body.description ?? ""), sourcesText,
+              }));
+            } catch (error) { return learningError(res, error); }
+          }
+
+          if (req.method === "POST" && url.pathname === "/api/learning/ai/challenge") {
+            try {
+              if (!learningAi.client) throw Object.assign(new Error("AI 未配置"), { code: "AI_NOT_CONFIGURED" });
+              const body = await readJson(req, 256 * 1024);
+              return json(res, 200, await learningAi.client.challenge({
+                projectTitle: String(body.project_title ?? ""),
+                levels: Array.isArray(body.levels) ? body.levels : [],
+              }));
+            } catch (error) { return learningError(res, error); }
           }
 
           if (req.method === "GET" && url.pathname === "/api/materials/folder") {
@@ -1093,13 +1379,20 @@ export function workbenchApiPlugin({
           if (req.method === "GET" && url.pathname.startsWith("/api/reader-images/")) {
             const id = decodeURIComponent(url.pathname.slice("/api/reader-images/".length));
             const current = await currentIndex();
-            return serveReaderImage(
-              res,
-              current,
-              vaultRoot,
-              id,
-              url.searchParams.get("src"),
-            );
+            try {
+              return await serveReaderImage(
+                res,
+                current,
+                vaultRoot,
+                id,
+                url.searchParams.get("src"),
+              );
+            } catch (error) {
+              if (error?.code === "PATH_NOT_ALLOWLISTED") {
+                return json(res, 403, { error: { message: error.message } });
+              }
+              throw error;
+            }
           }
 
           if (req.method === "GET" && url.pathname.startsWith("/api/documents/")) {

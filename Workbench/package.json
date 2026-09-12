@@ -8,6 +8,9 @@
     "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
     "privacy:scan": "node scripts/privacy-scan.mjs",
     "demo:generate": "node scripts/generate-demo-douyin.mjs",
+    "job:login": "node scripts/job-boss-login.mjs",
+    "job:fetch": "node scripts/job-boss-fetch.mjs",
+    "job:digest": "node scripts/job-digest.mjs",
     "build": "VITE_WORKBENCH_HOSTED=true vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
     "test:authenticity": "node --test tests/data-authenticity.test.mjs",
@@ -16,6 +19,7 @@
     "test:social-insights": "node --test tests/social-insights.test.mjs tests/social-insights-ui.test.mjs",
     "test:materials": "node --test tests/materials.test.mjs tests/material-reading-state.test.mjs",
     "test:books": "node --test tests/books.test.mjs tests/book-reading-progress.test.mjs",
+    "test:learning": "node --test tests/learning-schema.test.mjs tests/learning-unlock.test.mjs tests/learning-ai.test.mjs tests/learning-codex-prompt.test.mjs",
     "test:vault-sync": "node --test tests/vault-sync.test.mjs",
     "test:graph-motion": "node --test tests/graph-v6-motion.test.mjs tests/graph-v6-model.test.mjs",
     "test:reader-anchors": "node --test tests/reader-anchors.test.mjs",
@@ -53,5 +57,9 @@
     "vite": "6.4.2",
     "xlsx": "^0.18.5",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "rebrowser-playwright": "^1.52.0"
   }
 }

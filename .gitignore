@@ -29,5 +29,11 @@ secrets.*.json
 *.log
 
 Workbench/config/attention.local.json
+Workbench/config/learning-ai.local.json
+Workbench/config/job-profile.local.json
+
+# Job tracker runtime data (BOSS session profile, job store).
+Workbench/data/*.local.json
+Workbench/data/boss-profile/
 个人知识库/10_raw/my-thoughts/reading-notes/*
 !个人知识库/10_raw/my-thoughts/reading-notes/.gitkeep

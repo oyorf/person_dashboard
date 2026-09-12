@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "apiKey": "待填",
+  "model": "qwen-plus"
+}

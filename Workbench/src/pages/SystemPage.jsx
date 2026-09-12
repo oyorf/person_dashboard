@@ -6,6 +6,10 @@ import { formatFullDate } from "../lib/format";
 export function SystemPage() {
   const [runtime, setRuntime] = useState({ data: null, source: "loading", error: null });
   const [refreshing, setRefreshing] = useState(false);
+  const [aiConfig, setAiConfig] = useState(null);
+  const [aiForm, setAiForm] = useState({ baseUrl: "", apiKey: "", model: "" });
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiMessage, setAiMessage] = useState(null);
 
   const loadRuntime = async () => {
     const response = await getRuntimeStatus();
@@ -17,10 +21,39 @@ export function SystemPage() {
     getRuntimeStatus().then((response) => {
       if (!cancelled) setRuntime(response);
     });
+    fetch("/api/config/learning-ai")
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const config = await response.json();
+        setAiConfig(config);
+        setAiForm({ baseUrl: config.baseUrl ?? "", apiKey: "", model: config.model ?? "" });
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const saveAiConfig = async () => {
+    setAiSaving(true);
+    setAiMessage(null);
+    try {
+      const response = await fetch("/api/config/learning-ai", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(aiForm),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error?.message ?? `HTTP ${response.status}`);
+      setAiConfig(result);
+      setAiForm({ baseUrl: result.baseUrl ?? "", apiKey: "", model: result.model ?? "" });
+      setAiMessage("已保存并即时生效（无需重启）。");
+    } catch (error) {
+      setAiMessage(error.message);
+    } finally {
+      setAiSaving(false);
+    }
+  };
 
   const isLoading = runtime.source === "loading";
   const vault = runtime.data?.vault;
@@ -135,6 +168,81 @@ export function SystemPage() {
               <dd>{isLoading ? "—" : codex?.source || "—"}</dd>
             </div>
           </div>
+        </div>
+
+        {/* Learning AI Panel */}
+        <div className="panel">
+          <div className="panel__head">
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span
+                className={`status-dot ${
+                  aiConfig ? (aiConfig.configured ? "status-dot--ok" : "status-dot--warn") : ""
+                }`}
+              />
+              <h2 className="panel__title">学习闯关 AI</h2>
+            </div>
+          </div>
+
+          <div>
+            <div className="system-kv">
+              <dt>状态</dt>
+              <dd>{aiConfig ? (aiConfig.configured ? "已配置" : "未配置") : "—"}</dd>
+            </div>
+            <div className="system-kv">
+              <dt>配置来源</dt>
+              <dd>
+                {aiConfig?.source === "local-file"
+                  ? "本页面保存的配置"
+                  : aiConfig?.source === "env"
+                    ? "Workbench/.env"
+                    : "—"}
+              </dd>
+            </div>
+            <div className="system-kv">
+              <dt>API Key</dt>
+              <dd>{aiConfig?.apiKeyPreview ?? "—"}</dd>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "13px" }}>
+              Base URL（OpenAI 兼容接口）
+              <input
+                value={aiForm.baseUrl}
+                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                onChange={(event) => setAiForm({ ...aiForm, baseUrl: event.target.value })}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "13px" }}>
+              API Key（留空则保留已保存的 Key）
+              <input
+                type="password"
+                value={aiForm.apiKey}
+                placeholder={aiConfig?.configured ? "已保存，留空保持不变" : "填入你的 API Key"}
+                onChange={(event) => setAiForm({ ...aiForm, apiKey: event.target.value })}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "13px" }}>
+              模型
+              <input
+                value={aiForm.model}
+                placeholder="qwen-plus"
+                onChange={(event) => setAiForm({ ...aiForm, model: event.target.value })}
+              />
+            </label>
+          </div>
+
+          {aiMessage ? <p className="provenance" style={{ marginTop: "8px" }}>{aiMessage}</p> : null}
+
+          <button
+            type="button"
+            className="graph-filter"
+            onClick={saveAiConfig}
+            disabled={aiSaving}
+            style={{ marginTop: "16px", width: "100%" }}
+          >
+            {aiSaving ? "保存中…" : "保存 AI 配置"}
+          </button>
         </div>
       </div>
 
